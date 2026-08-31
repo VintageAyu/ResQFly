@@ -120,6 +120,38 @@ export const DroneTerminal: React.FC<DroneTerminalProps> = ({ onNavigate }) => {
   const logContainerRef = useRef<HTMLDivElement | null>(null);
   const serialPortRef = useRef<any>(null);
   const serialReaderRef = useRef<any>(null);
+  const terminalIframeRef = useRef<HTMLIFrameElement | null>(null);
+
+  // Sync telemetry into the Cyberpunk iframe console
+  useEffect(() => {
+    const syncToIframe = () => {
+      if (terminalIframeRef.current?.contentWindow) {
+        terminalIframeRef.current.contentWindow.postMessage({
+          type: 'TELEMETRY_UPDATE',
+          data: {
+            altitude,
+            alt: altitude,
+            speed,
+            battery,
+            battery_pct: battery,
+            voltage: hardwareVoltage,
+            volts: hardwareVoltage,
+            flightMode,
+            mode: flightMode,
+            armed: isHardwareArmed,
+            sats: satsCount,
+            satellites: satsCount,
+            is_live: true,
+            link_source: 'PIXHAWK'
+          }
+        }, '*');
+      }
+    };
+
+    syncToIframe();
+    const interval = setInterval(syncToIframe, 500);
+    return () => clearInterval(interval);
+  }, [altitude, speed, battery, hardwareVoltage, flightMode, isHardwareArmed, satsCount]);
 
   // Auto-scroll terminal
   useEffect(() => {
@@ -806,10 +838,34 @@ export const DroneTerminal: React.FC<DroneTerminalProps> = ({ onNavigate }) => {
                 }`}
               >
                 <iframe
+                  ref={terminalIframeRef}
                   src="/terminal/index.html"
                   title="ResQFly Terminal Console"
                   className="w-full h-full border-0"
                   allow="fullscreen; accelerometer; gyroscope"
+                  onLoad={() => {
+                    if (terminalIframeRef.current?.contentWindow) {
+                      terminalIframeRef.current.contentWindow.postMessage({
+                        type: 'TELEMETRY_UPDATE',
+                        data: {
+                          altitude,
+                          alt: altitude,
+                          speed,
+                          battery,
+                          battery_pct: battery,
+                          voltage: hardwareVoltage,
+                          volts: hardwareVoltage,
+                          flightMode,
+                          mode: flightMode,
+                          armed: isHardwareArmed,
+                          sats: satsCount,
+                          satellites: satsCount,
+                          is_live: true,
+                          link_source: 'PIXHAWK'
+                        }
+                      }, '*');
+                    }
+                  }}
                 />
               </div>
             </div>
