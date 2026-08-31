@@ -13,6 +13,9 @@ import {
   ArrowLeft,
   Maximize2,
   ExternalLink,
+  Cable,
+  Cpu,
+  Activity
 } from 'lucide-react';
 import { PageTab } from './Navbar';
 
@@ -46,7 +49,7 @@ const INITIAL_LOGS: TerminalLog[] = [
     id: '4',
     time: '10:04:18',
     type: 'warn',
-    text: '[STATUS] Autonomous mission active. Ready for operator web commands.',
+    text: '[STATUS] Hardware Serial & Cloud Ready. Click "CONNECT PIXHAWK" for physical COM port telemetry.',
   },
 ];
 
@@ -58,6 +61,34 @@ const PRESET_COMMANDS = [
   { label: 'RETURN_TO_BASE', cmd: 'rtb', desc: 'Auto-pilot home coordinates' },
   { label: 'SWARM_SYNC', cmd: 'swarm sync', desc: 'Sync mesh fleet telemetry' },
 ];
+
+// ArduPilot Copter Flight Modes Mapping
+const ARDUPILOT_COPTER_MODES: Record<number, string> = {
+  0: 'STABILIZE',
+  1: 'ACRO',
+  2: 'ALT_HOLD',
+  3: 'AUTO',
+  4: 'GUIDED',
+  5: 'LOITER',
+  6: 'RTL',
+  7: 'CIRCLE',
+  9: 'LAND',
+  11: 'DRIFT',
+  13: 'SPORT',
+  14: 'FLIP',
+  15: 'AUTOTUNE',
+  16: 'POSHOLD',
+  17: 'BRAKE',
+  18: 'THROW',
+  19: 'AVOID_ADSB',
+  20: 'GUIDED_NOGPS',
+  21: 'SMART_RTL',
+  22: 'FLOWHOLD',
+  23: 'FOLLOW',
+  24: 'ZIGZAG',
+  25: 'SYSTEMID',
+  26: 'AUTOROTATE'
+};
 
 interface DroneTerminalProps {
   onNavigate?: (tab: PageTab) => void;
@@ -73,13 +104,22 @@ export const DroneTerminal: React.FC<DroneTerminalProps> = ({ onNavigate }) => {
   const [altitude, setAltitude] = useState(48.2);
   const [speed, setSpeed] = useState(34.2);
   const [battery, setBattery] = useState(94);
+  const [hardwareVoltage, setHardwareVoltage] = useState<number>(22.2);
+  const [satsCount, setSatsCount] = useState<number>(18);
   const [flightMode, setFlightMode] = useState('AUTONOMOUS_CRUISE');
+  const [isHardwareArmed, setIsHardwareArmed] = useState<boolean>(false);
   const [isLive, setIsLive] = useState(true);
   const [viewMode, setViewMode] = useState<TerminalViewMode>('console');
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [backendOnline, setBackendOnline] = useState<boolean>(true);
   const [latencyMs, setLatencyMs] = useState<number>(18);
+  const [serialConnected, setSerialConnected] = useState<boolean>(false);
+  const [serialPortInfo, setSerialPortInfo] = useState<string>('COM17 (Pixhawk)');
+  const [isConnectingSerial, setIsConnectingSerial] = useState<boolean>(false);
+  
   const logContainerRef = useRef<HTMLDivElement | null>(null);
+  const serialPortRef = useRef<any>(null);
+  const serialReaderRef = useRef<any>(null);
 
   // Auto-scroll terminal
   useEffect(() => {
@@ -87,6 +127,233 @@ export const DroneTerminal: React.FC<DroneTerminalProps> = ({ onNavigate }) => {
       logContainerRef.current.scrollTop = logContainerRef.current.scrollHeight;
     }
   }, [logs]);
+
+  const addLog = (text: string, type: 'info' | 'success' | 'warn' | 'cmd' = 'info') => {
+    const now = new Date();
+    const timeStr = now.toTimeString().split(' ')[0];
+    setLogs((prev) => [
+      ...prev,
+      { id: `${Date.now()}-${Math.random()}`, time: timeStr, type, text },
+    ]);
+  };
+
+  // Process raw MAVLink v1 / v2 byte payloads
+  const processMavlinkPayload = (msgId: number, payload: Uint8Array) => {
+    const view = new DataView(payload.buffer, payload.byteOffset, payload.byteLength);
+    try {
+      switch (msgId) {
+        case 0: { // HEARTBEAT
+          if (payload.length >= 9) {
+            const customMode = view.getUint32(0, true);
+            const baseMode = payload[6];
+            const isArmed = (baseMode & 128) !== 0;
+            setIsHardwareArmed(isArmed);
+            const modeName = ARDUPILOT_COPTER_MODES[customMode] || `MODE_${customMode}`;
+            setFlightMode(modeName);
+          }
+          break;
+        }
+        case 30: { // ATTITUDE
+          // Pitch / Roll telemetry received
+          break;
+        }
+        case 33: { // GLOBAL_POSITION_INT
+          if (payload.length >= 28) {
+            const alt = view.getInt32(12, true) / 1000;
+            const relAlt = view.getInt32(16, true) / 1000;
+            const displayAlt = relAlt > 0 ? relAlt : alt;
+            if (displayAlt > -500 && displayAlt < 10000) {
+              setAltitude(+displayAlt.toFixed(1));
+            }
+          }
+          break;
+        }
+        case 74: { // VFR_HUD
+          if (payload.length >= 20) {
+            const groundspeed = view.getFloat32(4, true) * 3.6; // km/h
+            const alt = view.getFloat32(8, true);
+            if (groundspeed >= 0 && groundspeed < 300) setSpeed(+groundspeed.toFixed(1));
+            if (alt > -500 && alt < 10000) setAltitude(+alt.toFixed(1));
+          }
+          break;
+        }
+        case 1: { // SYS_STATUS
+          if (payload.length >= 31) {
+            const voltage = view.getUint16(14, true) / 1000;
+            const rem = payload[18];
+            if (voltage > 0) setHardwareVoltage(+voltage.toFixed(2));
+            if (rem >= 0 && rem <= 100) setBattery(rem);
+          }
+          break;
+        }
+        case 24: { // GPS_RAW_INT
+          if (payload.length >= 30) {
+            const sats = payload[7];
+            if (sats >= 0 && sats <= 40) setSatsCount(sats);
+          }
+          break;
+        }
+        case 253: { // STATUSTEXT
+          if (payload.length >= 51) {
+            const textBytes = payload.slice(1, 51);
+            const text = new TextDecoder().decode(textBytes).replace(/\0/g, '').trim();
+            if (text) {
+              addLog(`[PIXHAWK] ${text}`, 'info');
+            }
+          }
+          break;
+        }
+      }
+    } catch (e) {
+      // ignore partial frame read error
+    }
+  };
+
+  // Web Serial Stream Reader
+  const readSerialStream = async (port: any) => {
+    let rxBuffer = new Uint8Array(0);
+    const reader = port.readable.getReader();
+    serialReaderRef.current = reader;
+
+    const concatBuffers = (a: Uint8Array, b: Uint8Array) => {
+      const c = new Uint8Array(a.length + b.length);
+      c.set(a, 0);
+      c.set(b, a.length);
+      return c;
+    };
+
+    try {
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        if (value) {
+          rxBuffer = concatBuffers(rxBuffer, value);
+
+          while (rxBuffer.length > 0) {
+            const v2Idx = rxBuffer.indexOf(0xFD);
+            const v1Idx = rxBuffer.indexOf(0xFE);
+            let startIdx = -1;
+            let isV2 = false;
+
+            if (v2Idx !== -1 && (v1Idx === -1 || v2Idx < v1Idx)) {
+              startIdx = v2Idx;
+              isV2 = true;
+            } else if (v1Idx !== -1) {
+              startIdx = v1Idx;
+              isV2 = false;
+            }
+
+            if (startIdx === -1) {
+              rxBuffer = new Uint8Array(0);
+              break;
+            }
+
+            if (startIdx > 0) {
+              rxBuffer = rxBuffer.slice(startIdx);
+            }
+
+            if (isV2) {
+              if (rxBuffer.length < 12) break;
+              const payloadLen = rxBuffer[1];
+              const incompat = rxBuffer[2];
+              const hasSig = (incompat & 0x01) !== 0;
+              const totalLen = 10 + payloadLen + 2 + (hasSig ? 13 : 0);
+              if (rxBuffer.length < totalLen) break;
+
+              const msgId = rxBuffer[7] | (rxBuffer[8] << 8) | (rxBuffer[9] << 16);
+              const payload = rxBuffer.slice(10, 10 + payloadLen);
+              processMavlinkPayload(msgId, payload);
+              rxBuffer = rxBuffer.slice(totalLen);
+            } else {
+              if (rxBuffer.length < 8) break;
+              const payloadLen = rxBuffer[1];
+              const totalLen = 6 + payloadLen + 2;
+              if (rxBuffer.length < totalLen) break;
+
+              const msgId = rxBuffer[5];
+              const payload = rxBuffer.slice(6, 6 + payloadLen);
+              processMavlinkPayload(msgId, payload);
+              rxBuffer = rxBuffer.slice(totalLen);
+            }
+          }
+        }
+      }
+    } catch (err: any) {
+      if (err?.name !== 'NetworkError') {
+        console.warn('Serial reader error:', err);
+      }
+    } finally {
+      reader.releaseLock();
+    }
+  };
+
+  // Connect Physical Pixhawk via Web Serial
+  const handleConnectPixhawk = async () => {
+    if (!('serial' in navigator)) {
+      addLog('[SERIAL_ERR] Web Serial API is supported in Chrome, Edge, Brave, and Opera browsers.', 'warn');
+      return;
+    }
+
+    try {
+      setIsConnectingSerial(true);
+      addLog('[HARDWARE] Requesting physical Pixhawk USB Serial Port (COM17)...', 'info');
+
+      // Request port with standard flight controller filters
+      const port = await (navigator as any).serial.requestPort({
+        filters: [
+          { usbVendorId: 0x1209 }, // ArduPilot / PX4 / pid.codes
+          { usbVendorId: 0x26ac }, // 3DR Pixhawk
+          { usbVendorId: 0x1d50 }, // PX4 Open Hardware
+          { usbVendorId: 0x0483 }, // STMicroelectronics Virtual COM
+          { usbVendorId: 0x10c4 }, // CP210x Telemetry Radio
+          { usbVendorId: 0x0403 }  // FTDI Telemetry Radio
+        ]
+      }).catch(async () => {
+        return await (navigator as any).serial.requestPort();
+      });
+
+      if (!port) {
+        setIsConnectingSerial(false);
+        return;
+      }
+
+      await port.open({ baudRate: 115200 });
+      serialPortRef.current = port;
+      setSerialConnected(true);
+      setSerialPortInfo('Pixhawk (COM17 @ 115200)');
+      addLog('✅ [HARDWARE_LINK] Physical Pixhawk connected on COM17 @ 115200 baud!', 'success');
+      addLog('📡 [MAVLINK] Streaming live HEARTBEAT, GPS_RAW, VFR_HUD, and BATTERY telemetry.', 'success');
+
+      readSerialStream(port);
+    } catch (err: any) {
+      console.error('Serial connection error:', err);
+      addLog(`[SERIAL_ERR] ${err?.message || 'Could not open serial port'}`, 'warn');
+      setSerialConnected(false);
+    } finally {
+      setIsConnectingSerial(false);
+    }
+  };
+
+  // Auto-detect previously granted serial ports on load
+  useEffect(() => {
+    if ('serial' in navigator) {
+      (navigator as any).serial.getPorts().then(async (ports: any[]) => {
+        if (ports && ports.length > 0 && !serialPortRef.current) {
+          try {
+            const p = ports[0];
+            await p.open({ baudRate: 115200 });
+            serialPortRef.current = p;
+            setSerialConnected(true);
+            setSerialPortInfo('Pixhawk (Auto-Linked)');
+            addLog('⚡ [AUTO_DETECT] Automatically linked to Pixhawk USB Port!', 'success');
+            readSerialStream(p);
+          } catch (e) {
+            // Port might be in use or waiting for user click
+          }
+        }
+      });
+    }
+  }, []);
 
   // Live Backend Health & Telemetry Ping
   useEffect(() => {
@@ -103,7 +370,7 @@ export const DroneTerminal: React.FC<DroneTerminalProps> = ({ onNavigate }) => {
           const json = await res.json();
           setBackendOnline(true);
           setLatencyMs(elapsed);
-          if (json?.data?.flightMode) {
+          if (!serialConnected && json?.data?.flightMode) {
             setFlightMode(json.data.flightMode);
           }
         } else if (isMounted) {
@@ -120,11 +387,11 @@ export const DroneTerminal: React.FC<DroneTerminalProps> = ({ onNavigate }) => {
       isMounted = false;
       clearInterval(timer);
     };
-  }, []);
+  }, [serialConnected]);
 
-  // Telemetry fluctuation simulator
+  // Telemetry fluctuation simulator (only runs if physical hardware serial is not connected)
   useEffect(() => {
-    if (!isLive) return;
+    if (!isLive || serialConnected) return;
     const interval = setInterval(() => {
       setAltitude((prev) => +(prev + (Math.random() * 0.4 - 0.2)).toFixed(1));
       setSpeed((prev) => +(prev + (Math.random() * 0.6 - 0.3)).toFixed(1));
@@ -133,16 +400,7 @@ export const DroneTerminal: React.FC<DroneTerminalProps> = ({ onNavigate }) => {
       }
     }, 1500);
     return () => clearInterval(interval);
-  }, [isLive]);
-
-  const addLog = (text: string, type: 'info' | 'success' | 'warn' | 'cmd' = 'info') => {
-    const now = new Date();
-    const timeStr = now.toTimeString().split(' ')[0];
-    setLogs((prev) => [
-      ...prev,
-      { id: `${Date.now()}-${Math.random()}`, time: timeStr, type, text },
-    ]);
-  };
+  }, [isLive, serialConnected]);
 
   const handleExecute = async (commandStr: string) => {
     const raw = commandStr.trim();
@@ -275,7 +533,29 @@ export const DroneTerminal: React.FC<DroneTerminalProps> = ({ onNavigate }) => {
           </div>
 
           {/* Dedicated Window & Fullscreen Actions */}
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            {/* Direct Web Serial Connect Button */}
+            <button
+              type="button"
+              onClick={handleConnectPixhawk}
+              disabled={isConnectingSerial}
+              className={`inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-mono transition-all border cursor-pointer ${
+                serialConnected
+                  ? 'bg-emerald-600/30 text-emerald-300 border-emerald-500 shadow-[0_0_15px_rgba(16,185,129,0.3)]'
+                  : 'bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border-amber-500/50 animate-pulse'
+              }`}
+              title="Connect physical Pixhawk / ArduPilot via USB Serial (COM17)"
+            >
+              <Cable className="w-3.5 h-3.5" />
+              <span>
+                {isConnectingSerial
+                  ? 'Connecting...'
+                  : serialConnected
+                  ? 'Pixhawk Linked (COM17)'
+                  : '⚡ Connect Pixhawk USB'}
+              </span>
+            </button>
+
             <a
               href="/terminal/index.html"
               target="_blank"
@@ -303,35 +583,47 @@ export const DroneTerminal: React.FC<DroneTerminalProps> = ({ onNavigate }) => {
             <div>
               <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-[#1C2E1E] text-emerald-400 text-xs font-semibold uppercase tracking-wider mb-3 border border-emerald-900/50">
                 <Radio className="w-3.5 h-3.5 animate-pulse" />
-                <span>Live Ground Control Station &bull; Web Edition</span>
+                <span>Live Ground Control Station &bull; Web & Hardware Edition</span>
               </div>
               <h1 className="text-3xl sm:text-4xl md:text-5xl font-normal tracking-tight text-white">
                 ResQFly Terminal Console
               </h1>
               <p className="text-neutral-400 mt-2 max-w-2xl text-sm sm:text-base">
-                Autonomous drone orchestration, 3D bio-holo telemetry, SAR map tracking, FLIR radiometric optics, and sub-millisecond command execution.
+                Autonomous drone orchestration, Pixhawk MAVLink v2 telemetry, 3D bio-holo tracking, FLIR radiometric optics, and sub-millisecond command execution.
               </p>
             </div>
 
             {/* Quick Connection Beacon */}
-            <div className="flex items-center gap-3.5 bg-[#152316] border border-[#253927] rounded-2xl px-4 sm:px-5 py-3 shrink-0">
+            <div className="flex flex-wrap items-center gap-3 bg-[#152316] border border-[#253927] rounded-2xl px-4 sm:px-5 py-3 shrink-0">
               <div className="flex items-center gap-2">
                 <span
                   className={`w-2.5 h-2.5 rounded-full ${
-                    backendOnline ? 'bg-emerald-400 animate-ping' : 'bg-amber-400'
+                    serialConnected
+                      ? 'bg-cyan-400 animate-ping'
+                      : backendOnline
+                      ? 'bg-emerald-400 animate-ping'
+                      : 'bg-amber-400'
                   }`}
                 />
                 <span
                   className={`text-xs font-semibold tracking-wide ${
-                    backendOnline ? 'text-emerald-300' : 'text-amber-300'
+                    serialConnected
+                      ? 'text-cyan-300'
+                      : backendOnline
+                      ? 'text-emerald-300'
+                      : 'text-amber-300'
                   }`}
                 >
-                  {backendOnline ? 'CLOUD GCS LINKED' : 'LOCAL SIMULATOR'}
+                  {serialConnected
+                    ? 'PIXHAWK MAVLINK LINKED'
+                    : backendOnline
+                    ? 'CLOUD GCS LINKED'
+                    : 'LOCAL SIMULATOR'}
                 </span>
               </div>
               <div className="h-4 w-px bg-neutral-700" />
               <span className="text-xs text-neutral-400 font-mono">
-                {backendOnline ? `${latencyMs}ms Vercel` : 'Offline'}
+                {serialConnected ? serialPortInfo : backendOnline ? `${latencyMs}ms Vercel` : 'Offline'}
               </span>
               <button
                 type="button"
@@ -353,7 +645,9 @@ export const DroneTerminal: React.FC<DroneTerminalProps> = ({ onNavigate }) => {
                 Altitude
               </span>
               <span className="text-xl sm:text-2xl font-bold font-mono text-white">{altitude} m</span>
-              <span className="text-[10px] sm:text-[11px] text-emerald-400/80 mt-1">AGL Laser Verified</span>
+              <span className="text-[10px] sm:text-[11px] text-emerald-400/80 mt-1">
+                {serialConnected ? 'Pixhawk Baro/GPS' : 'AGL Laser Verified'}
+              </span>
             </div>
 
             <div className="bg-[#152316]/90 border border-[#253927] rounded-2xl p-3.5 sm:p-4 flex flex-col">
@@ -362,7 +656,9 @@ export const DroneTerminal: React.FC<DroneTerminalProps> = ({ onNavigate }) => {
                 Ground Speed
               </span>
               <span className="text-xl sm:text-2xl font-bold font-mono text-white">{speed} km/h</span>
-              <span className="text-[10px] sm:text-[11px] text-neutral-400 mt-1">Heading: 142° SE</span>
+              <span className="text-[10px] sm:text-[11px] text-emerald-400/80 mt-1">
+                {serialConnected ? 'VFR_HUD Sensor' : 'GPS Ground Speed'}
+              </span>
             </div>
 
             <div className="bg-[#152316]/90 border border-[#253927] rounded-2xl p-3.5 sm:p-4 flex flex-col">
@@ -370,28 +666,47 @@ export const DroneTerminal: React.FC<DroneTerminalProps> = ({ onNavigate }) => {
                 <BatteryCharging className="w-3.5 h-3.5 text-emerald-400" />
                 LiPo Battery
               </span>
-              <span className="text-xl sm:text-2xl font-bold font-mono text-emerald-400">{battery}%</span>
-              <span className="text-[10px] sm:text-[11px] text-neutral-400 mt-1">22.2V 6S Solid-State</span>
+              <span className="text-xl sm:text-2xl font-bold font-mono text-white">{battery}%</span>
+              <span className="text-[10px] sm:text-[11px] text-emerald-400/80 mt-1">
+                {serialConnected && hardwareVoltage > 0 ? `${hardwareVoltage}V Active` : '6S LiHV Pack'}
+              </span>
             </div>
 
             <div className="bg-[#152316]/90 border border-[#253927] rounded-2xl p-3.5 sm:p-4 flex flex-col">
               <span className="text-xs text-neutral-400 flex items-center gap-1.5 mb-1">
                 <Wifi className="w-3.5 h-3.5 text-emerald-400" />
-                Signal RSSI
+                GPS / Satellites
               </span>
-              <span className="text-xl sm:text-2xl font-bold font-mono text-white">-62 dBm</span>
-              <span className="text-[10px] sm:text-[11px] text-emerald-400/80 mt-1">Mesh 5.8GHz COFDM</span>
+              <span className="text-xl sm:text-2xl font-bold font-mono text-white">{satsCount} Sats</span>
+              <span className="text-[10px] sm:text-[11px] text-emerald-400/80 mt-1">
+                {serialConnected ? 'MAVLink GPS Fix' : 'RTK Multi-Band Fix'}
+              </span>
             </div>
 
-            <div className="bg-[#152316]/90 border border-[#253927] rounded-2xl p-3.5 sm:p-4 flex flex-col col-span-2 sm:col-span-1 lg:col-span-2">
+            <div className="bg-[#152316]/90 border border-[#253927] rounded-2xl p-3.5 sm:p-4 flex flex-col">
               <span className="text-xs text-neutral-400 flex items-center gap-1.5 mb-1">
-                <Radio className="w-3.5 h-3.5 text-emerald-400" />
-                Flight State Mode
+                <Cpu className="w-3.5 h-3.5 text-emerald-400" />
+                Flight Mode
               </span>
-              <span className="text-base sm:text-lg lg:text-xl font-bold font-mono text-emerald-300 truncate">
+              <span className="text-sm sm:text-base font-bold font-mono text-emerald-300 truncate">
                 {flightMode}
               </span>
-              <span className="text-[10px] sm:text-[11px] text-neutral-400 mt-1">Auto-pilot AI Active</span>
+              <span className="text-[10px] sm:text-[11px] text-emerald-400/80 mt-1">
+                {serialConnected ? (isHardwareArmed ? '⚠️ MOTORS ARMED' : '🔒 SAFE DISARMED') : 'Autopilot Active'}
+              </span>
+            </div>
+
+            <div className="bg-[#152316]/90 border border-[#253927] rounded-2xl p-3.5 sm:p-4 flex flex-col">
+              <span className="text-xs text-neutral-400 flex items-center gap-1.5 mb-1">
+                <Activity className="w-3.5 h-3.5 text-emerald-400" />
+                Hardware Link
+              </span>
+              <span className="text-sm sm:text-base font-bold font-mono text-cyan-300 truncate">
+                {serialConnected ? 'COM17 ACTIVE' : 'WEB SERIAL'}
+              </span>
+              <span className="text-[10px] sm:text-[11px] text-neutral-400 mt-1">
+                {serialConnected ? '115200 MAVLink' : 'Click "Connect Pixhawk"'}
+              </span>
             </div>
           </div>
         )}
