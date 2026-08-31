@@ -172,7 +172,7 @@ export const DroneTerminal: React.FC<DroneTerminalProps> = ({ onNavigate }) => {
   // Sync real-time physical telemetry into the Cyberpunk iframe console
   useEffect(() => {
     const syncToIframe = () => {
-      if (terminalIframeRef.current?.contentWindow) {
+      if (serialConnected && terminalIframeRef.current?.contentWindow) {
         terminalIframeRef.current.contentWindow.postMessage({
           type: 'TELEMETRY_UPDATE',
           data: {
@@ -203,10 +203,12 @@ export const DroneTerminal: React.FC<DroneTerminalProps> = ({ onNavigate }) => {
       }
     };
 
-    syncToIframe();
+    if (serialConnected) {
+      syncToIframe();
+    }
     const interval = setInterval(syncToIframe, 300);
     return () => clearInterval(interval);
-  }, [altitude, speed, vspeed, battery, hardwareVoltage, currentAmps, throttle, pitch, roll, yaw, heading, flightMode, isHardwareArmed, satsCount]);
+  }, [serialConnected, altitude, speed, vspeed, battery, hardwareVoltage, currentAmps, throttle, pitch, roll, yaw, heading, flightMode, isHardwareArmed, satsCount]);
 
   // Auto-scroll terminal
   useEffect(() => {
@@ -917,17 +919,25 @@ export const DroneTerminal: React.FC<DroneTerminalProps> = ({ onNavigate }) => {
                   className="w-full h-full border-0"
                   allow="fullscreen; accelerometer; gyroscope"
                   onLoad={() => {
-                    if (terminalIframeRef.current?.contentWindow) {
+                    if (serialConnected && terminalIframeRef.current?.contentWindow) {
                       terminalIframeRef.current.contentWindow.postMessage({
                         type: 'TELEMETRY_UPDATE',
                         data: {
                           altitude,
                           alt: altitude,
                           speed,
+                          vspeed,
                           battery,
                           battery_pct: battery,
                           voltage: hardwareVoltage,
                           volts: hardwareVoltage,
+                          amps: currentAmps,
+                          current: currentAmps,
+                          throttle,
+                          pitch,
+                          roll,
+                          yaw,
+                          heading: heading || yaw,
                           flightMode,
                           mode: flightMode,
                           armed: isHardwareArmed,
