@@ -65,6 +65,8 @@ interface DroneTerminalProps {
 
 type TerminalViewMode = 'console' | 'dual' | 'cli';
 
+const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || 'https://resqfly-backend.vercel.app';
+
 export const DroneTerminal: React.FC<DroneTerminalProps> = ({ onNavigate }) => {
   const [logs, setLogs] = useState<TerminalLog[]>(INITIAL_LOGS);
   const [inputVal, setInputVal] = useState('');
@@ -75,6 +77,8 @@ export const DroneTerminal: React.FC<DroneTerminalProps> = ({ onNavigate }) => {
   const [isLive, setIsLive] = useState(true);
   const [viewMode, setViewMode] = useState<TerminalViewMode>('console');
   const [isFullscreen, setIsFullscreen] = useState(false);
+  const [backendOnline, setBackendOnline] = useState<boolean>(true);
+  const [latencyMs, setLatencyMs] = useState<number>(18);
   const logContainerRef = useRef<HTMLDivElement | null>(null);
 
   // Auto-scroll terminal
@@ -83,6 +87,40 @@ export const DroneTerminal: React.FC<DroneTerminalProps> = ({ onNavigate }) => {
       logContainerRef.current.scrollTop = logContainerRef.current.scrollHeight;
     }
   }, [logs]);
+
+  // Live Backend Health & Telemetry Ping
+  useEffect(() => {
+    let isMounted = true;
+    const checkBackend = async () => {
+      const t0 = performance.now();
+      try {
+        const res = await fetch(`${BACKEND_URL}/api/drone/telemetry`, {
+          method: 'GET',
+          headers: { 'Accept': 'application/json' }
+        });
+        const elapsed = Math.round(performance.now() - t0);
+        if (res.ok && isMounted) {
+          const json = await res.json();
+          setBackendOnline(true);
+          setLatencyMs(elapsed);
+          if (json?.data?.flightMode) {
+            setFlightMode(json.data.flightMode);
+          }
+        } else if (isMounted) {
+          setBackendOnline(false);
+        }
+      } catch (err) {
+        if (isMounted) setBackendOnline(false);
+      }
+    };
+
+    checkBackend();
+    const timer = setInterval(checkBackend, 5000);
+    return () => {
+      isMounted = false;
+      clearInterval(timer);
+    };
+  }, []);
 
   // Telemetry fluctuation simulator
   useEffect(() => {
@@ -106,13 +144,41 @@ export const DroneTerminal: React.FC<DroneTerminalProps> = ({ onNavigate }) => {
     ]);
   };
 
-  const handleExecute = (commandStr: string) => {
+  const handleExecute = async (commandStr: string) => {
     const raw = commandStr.trim();
     if (!raw) return;
 
     addLog(`$ ${raw}`, 'cmd');
+    setInputVal('');
+
     const cmd = raw.toLowerCase();
 
+    // 1. Try sending command to Live Vercel Backend
+    try {
+      const res = await fetch(`${BACKEND_URL}/api/drone/command`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ command: raw, operator: 'Web Pilot (dronzer.me)' })
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        if (data.message) {
+          addLog(`[CLOUD_GCS] ${data.message}`, 'success');
+        }
+        if (data.state) {
+          if (data.state.flightMode) setFlightMode(data.state.flightMode);
+          if (data.state.altitude !== undefined) setAltitude(data.state.altitude);
+          if (data.state.speed !== undefined) setSpeed(data.state.speed);
+          if (data.state.battery !== undefined) setBattery(data.state.battery);
+        }
+        return;
+      }
+    } catch (err) {
+      console.warn('Backend offline or unreachable, using local flight computer fallback:', err);
+    }
+
+    // 2. Fallback to Autonomous Flight Computer Simulator if backend is sleeping
     if (cmd === 'help') {
       addLog('Available commands: arm, takeoff <alt>, land, scan <mode>, payload deploy, rtb, swarm sync, status, ceo, clear', 'info');
     } else if (cmd.startsWith('arm')) {
@@ -142,8 +208,6 @@ export const DroneTerminal: React.FC<DroneTerminalProps> = ({ onNavigate }) => {
     } else {
       addLog(`[SYNTAX_ERR] Unknown command: "${raw}". Type "help" for drone commands.`, 'warn');
     }
-
-    setInputVal('');
   };
 
   return (
@@ -250,17 +314,29 @@ export const DroneTerminal: React.FC<DroneTerminalProps> = ({ onNavigate }) => {
             </div>
 
             {/* Quick Connection Beacon */}
-            <div className="flex items-center gap-4 bg-[#152316] border border-[#253927] rounded-2xl px-5 py-3.5 shrink-0">
+            <div className="flex items-center gap-3.5 bg-[#152316] border border-[#253927] rounded-2xl px-4 sm:px-5 py-3 shrink-0">
               <div className="flex items-center gap-2">
-                <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-ping" />
-                <span className="text-xs font-medium text-emerald-300">UPLINK ACTIVE</span>
+                <span
+                  className={`w-2.5 h-2.5 rounded-full ${
+                    backendOnline ? 'bg-emerald-400 animate-ping' : 'bg-amber-400'
+                  }`}
+                />
+                <span
+                  className={`text-xs font-semibold tracking-wide ${
+                    backendOnline ? 'text-emerald-300' : 'text-amber-300'
+                  }`}
+                >
+                  {backendOnline ? 'CLOUD GCS LINKED' : 'LOCAL SIMULATOR'}
+                </span>
               </div>
               <div className="h-4 w-px bg-neutral-700" />
-              <span className="text-xs text-neutral-400 font-mono">14ms Latency</span>
+              <span className="text-xs text-neutral-400 font-mono">
+                {backendOnline ? `${latencyMs}ms Vercel` : 'Offline'}
+              </span>
               <button
                 type="button"
                 onClick={() => setIsLive(!isLive)}
-                className="text-xs text-neutral-300 hover:text-white underline underline-offset-2 ml-2 cursor-pointer"
+                className="text-xs text-neutral-300 hover:text-white underline underline-offset-2 ml-1 cursor-pointer"
               >
                 {isLive ? 'Pause' : 'Resume'}
               </button>
