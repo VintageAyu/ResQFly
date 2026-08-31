@@ -116,13 +116,60 @@ export const DroneTerminal: React.FC<DroneTerminalProps> = ({ onNavigate }) => {
   const [serialConnected, setSerialConnected] = useState<boolean>(false);
   const [serialPortInfo, setSerialPortInfo] = useState<string>('COM17 (Pixhawk)');
   const [isConnectingSerial, setIsConnectingSerial] = useState<boolean>(false);
+  const [pitch, setPitch] = useState<number>(0.0);
+  const [roll, setRoll] = useState<number>(0.0);
+  const [yaw, setYaw] = useState<number>(0.0);
+  const [heading, setHeading] = useState<number>(0);
+  const [vspeed, setVspeed] = useState<number>(0.0);
+  const [throttle, setThrottle] = useState<number>(0);
+  const [currentAmps, setCurrentAmps] = useState<number>(0.0);
   
   const logContainerRef = useRef<HTMLDivElement | null>(null);
   const serialPortRef = useRef<any>(null);
   const serialReaderRef = useRef<any>(null);
   const terminalIframeRef = useRef<HTMLIFrameElement | null>(null);
 
-  // Sync telemetry into the Cyberpunk iframe console
+  // Auto-poll local Pixhawk daemon (COM17 auto-detected on localhost:3000)
+  useEffect(() => {
+    let isMounted = true;
+    const pollLocalPixhawk = async () => {
+      try {
+        const res = await fetch('http://localhost:3000/api/drone/telemetry');
+        if (res.ok && isMounted) {
+          const json = await res.json();
+          const d = json?.data;
+          if (d) {
+            setSerialConnected(true);
+            if (d.altitude !== undefined) setAltitude(d.altitude);
+            if (d.speed !== undefined) setSpeed(d.speed);
+            if (d.vspeed !== undefined) setVspeed(d.vspeed);
+            if (d.battery !== undefined) setBattery(d.battery);
+            if (d.voltage !== undefined) setHardwareVoltage(d.voltage);
+            if (d.current !== undefined) setCurrentAmps(d.current);
+            if (d.throttle !== undefined) setThrottle(d.throttle);
+            if (d.flightMode) setFlightMode(d.flightMode);
+            if (d.armed !== undefined) setIsHardwareArmed(d.armed);
+            if (d.pitch !== undefined) setPitch(d.pitch);
+            if (d.roll !== undefined) setRoll(d.roll);
+            if (d.yaw !== undefined) setYaw(d.yaw);
+            if (d.heading !== undefined) setHeading(d.heading);
+            if (d.sats !== undefined) setSatsCount(d.sats);
+          }
+        }
+      } catch (err) {
+        // local daemon not running or offline
+      }
+    };
+
+    pollLocalPixhawk();
+    const interval = setInterval(pollLocalPixhawk, 500);
+    return () => {
+      isMounted = false;
+      clearInterval(interval);
+    };
+  }, []);
+
+  // Sync real-time physical telemetry into the Cyberpunk iframe console
   useEffect(() => {
     const syncToIframe = () => {
       if (terminalIframeRef.current?.contentWindow) {
@@ -132,10 +179,18 @@ export const DroneTerminal: React.FC<DroneTerminalProps> = ({ onNavigate }) => {
             altitude,
             alt: altitude,
             speed,
+            vspeed,
             battery,
             battery_pct: battery,
             voltage: hardwareVoltage,
             volts: hardwareVoltage,
+            amps: currentAmps,
+            current: currentAmps,
+            throttle,
+            pitch,
+            roll,
+            yaw,
+            heading: heading || yaw,
             flightMode,
             mode: flightMode,
             armed: isHardwareArmed,
@@ -149,9 +204,9 @@ export const DroneTerminal: React.FC<DroneTerminalProps> = ({ onNavigate }) => {
     };
 
     syncToIframe();
-    const interval = setInterval(syncToIframe, 500);
+    const interval = setInterval(syncToIframe, 300);
     return () => clearInterval(interval);
-  }, [altitude, speed, battery, hardwareVoltage, flightMode, isHardwareArmed, satsCount]);
+  }, [altitude, speed, vspeed, battery, hardwareVoltage, currentAmps, throttle, pitch, roll, yaw, heading, flightMode, isHardwareArmed, satsCount]);
 
   // Auto-scroll terminal
   useEffect(() => {
@@ -185,17 +240,31 @@ export const DroneTerminal: React.FC<DroneTerminalProps> = ({ onNavigate }) => {
           }
           break;
         }
-        case 30: { // ATTITUDE
-          // Pitch / Roll telemetry received
+        case 30: { // ATTITUDE (Real IMU Pitch, Roll, Yaw)
+          if (payload.length >= 28) {
+            const r = view.getFloat32(4, true) * (180 / Math.PI);
+            const p = view.getFloat32(8, true) * (180 / Math.PI);
+            const y = view.getFloat32(12, true) * (180 / Math.PI);
+            setRoll(+r.toFixed(1));
+            setPitch(+p.toFixed(1));
+            const cleanYaw = +(y >= 0 ? y : y + 360).toFixed(1);
+            setYaw(+cleanYaw);
+            setHeading(Math.round(+cleanYaw));
+          }
           break;
         }
         case 33: { // GLOBAL_POSITION_INT
           if (payload.length >= 28) {
             const alt = view.getInt32(12, true) / 1000;
             const relAlt = view.getInt32(16, true) / 1000;
+            const hdg = view.getUint16(26, true) / 100;
             const displayAlt = relAlt > 0 ? relAlt : alt;
             if (displayAlt > -500 && displayAlt < 10000) {
               setAltitude(+displayAlt.toFixed(1));
+            }
+            if (hdg >= 0 && hdg <= 360) {
+              setHeading(Math.round(hdg));
+              setYaw(+hdg.toFixed(1));
             }
           }
           break;
@@ -204,8 +273,12 @@ export const DroneTerminal: React.FC<DroneTerminalProps> = ({ onNavigate }) => {
           if (payload.length >= 20) {
             const groundspeed = view.getFloat32(4, true) * 3.6; // km/h
             const alt = view.getFloat32(8, true);
+            const climb = view.getFloat32(12, true);
+            const thr = view.getUint16(18, true);
             if (groundspeed >= 0 && groundspeed < 300) setSpeed(+groundspeed.toFixed(1));
             if (alt > -500 && alt < 10000) setAltitude(+alt.toFixed(1));
+            setVspeed(+climb.toFixed(1));
+            setThrottle(thr);
           }
           break;
         }
