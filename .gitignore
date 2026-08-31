@@ -11,6 +11,12 @@ node_modules
 dist
 dist-ssr
 *.local
+.env
+.env.*
+!.env.example
+
+# Private Backend & Proprietary Terminal Engine Logic (Hidden from Public Repository)
+backend/
 
 # Editor directories and files
 .vscode/*
