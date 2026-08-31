@@ -636,6 +636,68 @@ export const DroneTerminal: React.FC<DroneTerminalProps> = ({ onNavigate }) => {
           </div>
         )}
 
+        {/* HIGH-VISIBILITY PIXHAWK HARDWARE LINK BANNER */}
+        {!isFullscreen && (
+          <div className="mb-6 p-4 rounded-2xl border bg-gradient-to-r from-[#0d1f12] via-[#112918] to-[#0d1f12] border-emerald-500/40 shadow-[0_0_25px_rgba(16,185,129,0.15)] flex flex-wrap items-center justify-between gap-4">
+            <div className="flex items-center gap-3">
+              <div
+                className={`p-2.5 rounded-xl ${
+                  serialConnected
+                    ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/40'
+                    : 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40'
+                }`}
+              >
+                <Cable className="w-5 h-5 animate-pulse" />
+              </div>
+              <div>
+                <div className="flex items-center gap-2">
+                  <span className="text-xs font-bold font-mono uppercase tracking-wider text-emerald-400">
+                    {serialConnected
+                      ? 'Physical Pixhawk Autopilot Linked'
+                      : 'Physical Pixhawk Detected on Laptop (COM17)'}
+                  </span>
+                  <span
+                    className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-mono font-bold ${
+                      serialConnected
+                        ? 'bg-cyan-900/60 text-cyan-300 border border-cyan-500/50'
+                        : 'bg-emerald-900/60 text-emerald-300 border border-emerald-500/50'
+                    }`}
+                  >
+                    {serialConnected ? 'MAVLINK STREAMING' : 'PORT COM17 READY'}
+                  </span>
+                </div>
+                <p className="text-xs text-neutral-300 mt-0.5 font-mono">
+                  {serialConnected
+                    ? `Live Telemetry on ${serialPortInfo} • MAVLink v2 @ 115200 baud • Mode: ${flightMode} • LiPo: ${hardwareVoltage > 0 ? hardwareVoltage + 'V' : battery + '%'}`
+                    : 'Hardware port COM17 verified. Click "Connect Pixhawk USB" to pipe physical MAVLink heartbeat & sensor data directly into gauges.'}
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={handleConnectPixhawk}
+                disabled={isConnectingSerial}
+                className={`px-4 py-2.5 rounded-xl text-xs font-mono font-bold transition-all border cursor-pointer flex items-center gap-2 ${
+                  serialConnected
+                    ? 'bg-cyan-600/30 hover:bg-cyan-600/40 text-cyan-300 border-cyan-400 shadow-[0_0_20px_rgba(6,182,212,0.4)]'
+                    : 'bg-emerald-600 hover:bg-emerald-500 text-white border-emerald-400 shadow-[0_0_20px_rgba(16,185,129,0.4)]'
+                }`}
+              >
+                <Cable className="w-4 h-4" />
+                <span>
+                  {isConnectingSerial
+                    ? 'Linking COM17...'
+                    : serialConnected
+                    ? 'Connected: COM17 (Click to Switch)'
+                    : '⚡ Connect Pixhawk USB'}
+                </span>
+              </button>
+            </div>
+          </div>
+        )}
+
         {/* Real-time Telemetry Dashboard Gauges */}
         {!isFullscreen && (
           <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 sm:gap-4 mb-6">
