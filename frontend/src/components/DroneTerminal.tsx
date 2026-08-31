@@ -101,12 +101,15 @@ const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || 'https://resqfly-backend
 export const DroneTerminal: React.FC<DroneTerminalProps> = ({ onNavigate }) => {
   const [logs, setLogs] = useState<TerminalLog[]>(INITIAL_LOGS);
   const [inputVal, setInputVal] = useState('');
-  const [altitude, setAltitude] = useState(48.2);
-  const [speed, setSpeed] = useState(34.2);
-  const [battery, setBattery] = useState(94);
-  const [hardwareVoltage, setHardwareVoltage] = useState<number>(22.2);
-  const [satsCount, setSatsCount] = useState<number>(18);
-  const [flightMode, setFlightMode] = useState('AUTONOMOUS_CRUISE');
+  const [altitude, setAltitude] = useState(0.0);
+  const [speed, setSpeed] = useState(0.0);
+  const [battery, setBattery] = useState(0);
+  const [hardwareVoltage, setHardwareVoltage] = useState<number>(0.0);
+  const [satsCount, setSatsCount] = useState<number>(0);
+  const [gpsFixType, setGpsFixType] = useState<string>('NO FIX');
+  const [lat, setLat] = useState<number>(0.0);
+  const [lon, setLon] = useState<number>(0.0);
+  const [flightMode, setFlightMode] = useState('STABILIZE');
   const [isHardwareArmed, setIsHardwareArmed] = useState<boolean>(false);
   const [isLive, setIsLive] = useState(true);
   const [viewMode, setViewMode] = useState<TerminalViewMode>('console');
@@ -154,6 +157,9 @@ export const DroneTerminal: React.FC<DroneTerminalProps> = ({ onNavigate }) => {
             if (d.yaw !== undefined) setYaw(d.yaw);
             if (d.heading !== undefined) setHeading(d.heading);
             if (d.sats !== undefined) setSatsCount(d.sats);
+            if (d.gpsFix) setGpsFixType(d.gpsFix);
+            if (d.lat !== undefined) setLat(d.lat);
+            if (d.lon !== undefined) setLon(d.lon);
           }
         }
       } catch (err) {
@@ -170,14 +176,14 @@ export const DroneTerminal: React.FC<DroneTerminalProps> = ({ onNavigate }) => {
   }, []);
 
   const latestTelemRef = useRef({
-    altitude, speed, vspeed, battery, hardwareVoltage, currentAmps, throttle, pitch, roll, yaw, heading, flightMode, isHardwareArmed, satsCount, serialConnected
+    altitude, speed, vspeed, battery, hardwareVoltage, currentAmps, throttle, pitch, roll, yaw, heading, flightMode, isHardwareArmed, satsCount, gpsFixType, lat, lon, serialConnected
   });
 
   useEffect(() => {
     latestTelemRef.current = {
-      altitude, speed, vspeed, battery, hardwareVoltage, currentAmps, throttle, pitch, roll, yaw, heading, flightMode, isHardwareArmed, satsCount, serialConnected
+      altitude, speed, vspeed, battery, hardwareVoltage, currentAmps, throttle, pitch, roll, yaw, heading, flightMode, isHardwareArmed, satsCount, gpsFixType, lat, lon, serialConnected
     };
-  }, [altitude, speed, vspeed, battery, hardwareVoltage, currentAmps, throttle, pitch, roll, yaw, heading, flightMode, isHardwareArmed, satsCount, serialConnected]);
+  }, [altitude, speed, vspeed, battery, hardwareVoltage, currentAmps, throttle, pitch, roll, yaw, heading, flightMode, isHardwareArmed, satsCount, gpsFixType, lat, lon, serialConnected]);
 
   // Sync real-time physical telemetry into the Cyberpunk iframe console at steady 100ms without churn
   useEffect(() => {
@@ -207,6 +213,10 @@ export const DroneTerminal: React.FC<DroneTerminalProps> = ({ onNavigate }) => {
             armed: t.isHardwareArmed,
             sats: t.satsCount,
             satellites: t.satsCount,
+            gpsFix: t.gpsFixType,
+            gps_fix: t.gpsFixType,
+            lat: t.lat,
+            lon: t.lon,
             is_live: true,
             link_source: 'PIXHAWK'
           }
