@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="description" content="ResQFly Console — Autonomous Drone Ground Control Station" />
+  <title>ResQFly Console</title>
+  <link rel="stylesheet" href="./src/styles.css" />
+</head>
+<body>
+  <div id="app">
+    <!-- Login Overlay -->
+    <div id="login-overlay" class="hidden">
+      <canvas id="login-canvas"></canvas>
+      <div id="login-form">
+        <div id="login-header">T.E.C.H. AUTHENTICATION</div>
+        <input id="login-user" type="text" placeholder="IDENTITY" autocomplete="off" />
+        <input id="login-pass" type="password" placeholder="PASSPHRASE" />
+        <div id="login-msg"></div>
+        <button id="login-btn">INITIALIZE LINK</button>
+      </div>
+    </div>
+
+    <!-- Main Canvas (cyberpunk border, hex bg, intro animations) -->
+    <canvas id="main-canvas"></canvas>
+
+    <!-- Content Container (fades in after login) -->
+    <div id="content" class="hidden">
+      <!-- Header -->
+      <div id="header">
+        <span id="status-lbl">SYSTEM READY</span>
+        <span id="app-title">TERMINAL</span>
+        <div id="win-controls">
+          <button id="btn-fullscreen" class="win-btn" title="Toggle Fullscreen (F11)">⛶</button>
+          <button id="btn-settings" class="win-btn" title="Settings">☼</button>
+        </div>
+      </div>
+
+      <!-- Tab Bar -->
+      <div id="tab-bar">
+        <button class="tab active" data-tab="terminal">TERMINAL</button>
+        <button class="tab" data-tab="bio">BIO</button>
+        <button class="tab" data-tab="status">STATUS</button>
+        <button class="tab" data-tab="prec">PRE-C</button>
+        <button class="tab" data-tab="map">MAP</button>
+        <button class="tab" data-tab="optics">OPTICS</button>
+        <button class="tab" data-tab="remote">REMOTE</button>
+        <button class="tab" data-tab="settings">SETTINGS</button>
+      </div>
+
+      <!-- Tab Content Panels -->
+      <div id="tab-content">
+        <!-- TERMINAL -->
+        <div class="tab-panel active" id="panel-terminal">
+          <!-- Real-Time Subsystem Telemetry Strip -->
+          <div id="terminal-telemetry-bar">
+            <div class="telem-chip" id="tb-link"><span class="chip-dot green"></span> LINK: <span class="val">915MHz RFD900X (-64 dBm)</span></div>
+            <div class="telem-chip" id="tb-gnss"><span class="chip-dot green"></span> GNSS: <span class="val">3D FIX (18 SATS)</span></div>
+            <div class="telem-chip" id="tb-batt"><span class="chip-dot green"></span> BATT: <span class="val">22.8V (87%)</span></div>
+            <div class="telem-chip" id="tb-mode"><span class="chip-dot cyan"></span> MODE: <span class="val">GUIDED</span></div>
+            <div class="telem-chip" id="tb-arm"><span class="chip-dot yellow"></span> MOTORS: <span class="val">DISARMED</span></div>
+            <div class="telem-chip" id="tb-sar"><span class="chip-dot magenta"></span> SAR AI: <span class="val">STANDBY</span></div>
+          </div>
+
+          <!-- Terminal Output Console -->
+          <div id="terminal-output"></div>
+
+          <!-- Quick Action Command Chips Toolbar -->
+          <div id="terminal-quick-bar">
+            <span class="quick-title">QUICK ACTIONS:</span>
+            <div class="quick-chips-scroll">
+              <button class="term-chip" data-cmd="flight-help">flight-help</button>
+              <button class="term-chip" data-cmd="status">status</button>
+              <button class="term-chip" data-cmd="sar-start">sar-start</button>
+              <button class="term-chip" data-cmd="sar-grid">sar-grid</button>
+              <button class="term-chip" data-cmd="arm">arm</button>
+              <button class="term-chip" data-cmd="takeoff 25">takeoff 25</button>
+              <button class="term-chip" data-cmd="scan">scan</button>
+              <button class="term-chip" data-cmd="targets">targets</button>
+              <button class="term-chip" data-cmd="telemetry">telemetry</button>
+              <button class="term-chip" data-cmd="rtl">rtl</button>
+              <button class="term-chip" data-cmd="diag">diag</button>
+              <button class="term-chip" data-cmd="clear">clear</button>
+            </div>
+          </div>
+
+          <!-- Interactive CLI Input Row with Cyber Prompt -->
+          <div id="terminal-input-row">
+            <div class="prompt-badge">
+              <span class="prompt-user">resqfly</span><span class="prompt-at">@</span><span class="prompt-host">sar-gcs</span><span class="prompt-sep">:</span><span class="prompt-path">~</span><span class="prompt-sym">$</span>
+            </div>
+            <input id="terminal-input" type="text" placeholder="Type command or click quick action above... (e.g. 'flight-help', 'status', 'sar-start')" autocomplete="off" spellcheck="false" />
+          </div>
+        </div>
+
+        <!-- BIO -->
+        <div class="tab-panel" id="panel-bio">
+          <canvas id="bio-canvas"></canvas>
+        </div>
+
+        <!-- STATUS -->
+        <div class="tab-panel" id="panel-status">
+          <canvas id="status-canvas"></canvas>
+        </div>
+
+        <!-- PRE-C -->
+        <div class="tab-panel" id="panel-prec">
+          <canvas id="prec-canvas"></canvas>
+          <div id="prec-overlay"></div>
+        </div>
+
+        <!-- MAP -->
+        <div class="tab-panel" id="panel-map">
+          <canvas id="map-canvas"></canvas>
+          <div id="map-controls"></div>
+        </div>
+
+        <!-- OPTICS -->
+        <div class="tab-panel" id="panel-optics">
+          <canvas id="optics-canvas"></canvas>
+        </div>
+
+        <!-- REMOTE -->
+        <div class="tab-panel" id="panel-remote">
+          <canvas id="remote-canvas"></canvas>
+        </div>
+
+        <!-- SETTINGS -->
+        <div class="tab-panel" id="panel-settings">
+          <div id="settings-scroll">
+            <div class="settings-group">
+              <h3>Terminal Custom Color</h3>
+              <div class="slider-row"><label>R:</label><input type="range" id="slider-r" min="0" max="255" value="255" /></div>
+              <div class="slider-row"><label>G:</label><input type="range" id="slider-g" min="0" max="255" value="0" /></div>
+              <div class="slider-row"><label>B:</label><input type="range" id="slider-b" min="0" max="255" value="0" /></div>
+            </div>
+            <div class="settings-group">
+              <h3>Dynamic RGB Flow</h3>
+              <label class="check-row"><input type="checkbox" id="chk-rgb" /> Enable RGB Smooth Flow</label>
+              <div class="slider-row"><label>Spectrum:</label><input type="range" id="slider-spectrum" min="5" max="10" value="5" /></div>
+              <label class="check-row"><input type="checkbox" id="chk-breathing" /> Enable RGB Breathing</label>
+            </div>
+            <div class="settings-group">
+              <h3>Animation Control</h3>
+              <div class="slider-row"><label>Flow Speed:</label><input type="range" id="slider-speed" min="0" max="10" value="2" /></div>
+              <button id="btn-flow-dir" class="settings-btn">Flow: Clockwise</button>
+              <div class="radio-group">
+                <label><input type="radio" name="anim-style" value="neon" checked /> Neon Flow</label>
+                <label><input type="radio" name="anim-style" value="pulse" /> Cyber Pulse</label>
+                <label><input type="radio" name="anim-style" value="static" /> Static</label>
+              </div>
+            </div>
+            <div class="settings-group">
+              <h3>Border Settings</h3>
+              <div class="slider-row"><label>Glow Size:</label><input type="range" id="slider-glow" min="2" max="16" value="12" /></div>
+              <div class="slider-row"><label>Flow Width:</label><input type="range" id="slider-flow-w" min="1" max="10" value="5" /></div>
+              <label class="check-row"><input type="checkbox" id="chk-glitch" /> Enable Heavy Glitch</label>
+            </div>
+            <div class="settings-group">
+              <h3>Honeycomb Matrix Settings</h3>
+              <div class="slider-row">
+                <label>Hex Size: <span id="lbl-hex-size" style="color:#00e5ff;font-weight:bold;">12px</span></label>
+                <input type="range" id="slider-hex-size" min="6" max="36" value="12" step="1" />
+              </div>
+              <div class="slider-row">
+                <label>Hex Gap: <span id="lbl-hex-gap" style="color:#00e5ff;font-weight:bold;">1.5px</span></label>
+                <input type="range" id="slider-hex-gap" min="0" max="6" value="1.5" step="0.5" />
+              </div>
+              <button id="btn-replay-intro" class="settings-btn" style="margin-top: 6px; width: 100%; border-color:#ff2a2a; color:#ff4455;">⚡ Preview / Replay Honeycomb Intro</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script type="module" src="./src/main.ts"></script>
+</body>
+</html>
