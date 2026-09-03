@@ -1,18 +1,30 @@
 import React, { useEffect, useRef, useState } from 'react';
 
 const FALLBACK_VIDEO_URL = '/robot_hero.mp4';
-const TOTAL_FRAMES = 193;
+const TOTAL_FRAMES = 241;
 
-// Keyframe Landmarks from Robot_looking_in_directions_1080p_202609032148.mp4:
-// - Frame 72: Neutral Center Forward (Horizontal baseline)
-// - Frame 48: Peak Look Right (viewer's right)
-// - Frame 96: Peak Look Left (viewer's left)
-// - Frame 168: Neutral Center Forward (Vertical baseline)
-// - Frame 144: Peak Look Up
-// - Frame 188: Peak Look Down
+// Landmarks from much_better.mp4 (360° orbital rotation):
+// - Frame 1: Center Neutral Forward
+// - Frame 24: Look Straight Up (12:00)
+// - Frame 51: Look Up-Right (1:30)
+// - Frame 78: Look Right (3:00)
+// - Frame 105: Look Down-Right (4:30)
+// - Frame 132: Look Straight Down (6:00)
+// - Frame 159: Look Down-Left (7:30)
+// - Frame 186: Look Left (9:00)
+// - Frame 213: Look Up-Left (10:30)
+// - Frame 240: Loop back to Up (12:00)
 
-type GazeAxis = 'H' | 'V';
-type GazeDirection = 'CENTER' | 'LOOKING RIGHT' | 'LOOKING LEFT' | 'LOOKING UP' | 'LOOKING DOWN';
+type GazeDirection =
+  | 'CENTER'
+  | 'LOOKING UP'
+  | 'LOOKING UP-RIGHT'
+  | 'LOOKING RIGHT'
+  | 'LOOKING DOWN-RIGHT'
+  | 'LOOKING DOWN'
+  | 'LOOKING DOWN-LEFT'
+  | 'LOOKING LEFT'
+  | 'LOOKING UP-LEFT';
 
 export const BackgroundVideo: React.FC = () => {
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -23,17 +35,16 @@ export const BackgroundVideo: React.FC = () => {
   const mousePosRef = useRef<{ x: number; y: number; active: boolean }>({ x: 0, y: 0, active: false });
   const idleTimerRef = useRef<number | null>(null);
 
-  // Gaze Graph State Machine
-  const currentAxisRef = useRef<GazeAxis>('H');
-  const currentFrameRef = useRef<number>(72.0);
-  const targetFrameRef = useRef<number>(72.0);
-  const targetAxisRef = useRef<GazeAxis>('H');
+  // Angular Orbit Engine State
+  const currentFrameRef = useRef<number>(1.0);
+  const targetFrameRef = useRef<number>(1.0);
+  const targetAngleRef = useRef<number | null>(null); // Angle in [0, 2pi) where 0 is UP
 
   const [directionLabel, setDirectionLabel] = useState<GazeDirection>('CENTER');
   const [loadedCount, setLoadedCount] = useState<number>(0);
   const imagesRef = useRef<HTMLImageElement[]>([]);
 
-  // 1. Preload 193 High-Definition Video Frames into Memory
+  // 1. Preload 241 High-Definition Video Frames into Memory
   useEffect(() => {
     const images: HTMLImageElement[] = [];
     let count = 0;
@@ -58,11 +69,11 @@ export const BackgroundVideo: React.FC = () => {
     };
   }, []);
 
-  // 2. High-Performance 60-120+ FPS Hardware-Accelerated Canvas Render Loop
+  // 2. High-Performance 60-120+ FPS Continuous 360° Orbital Canvas Render Loop
   useEffect(() => {
     let animId: number;
     let lastTime = performance.now();
-    let idleAngle = 0;
+    let ambientAngle = 0;
 
     const render = (time: number) => {
       animId = requestAnimationFrame(render);
@@ -74,54 +85,40 @@ export const BackgroundVideo: React.FC = () => {
       const isMouseActive = mousePosRef.current.active;
 
       if (isMobile || !isMouseActive) {
-        // Ambient Autonomous Gaze Movement (Gently scans when idle or on mobile)
-        idleAngle += deltaMs * 0.0008;
-        const ambientX = Math.sin(idleAngle) * 0.45;
-        const ambientY = Math.cos(idleAngle * 0.7) * 0.25;
-
-        // Map ambient motion to target
-        if (Math.abs(ambientX) >= Math.abs(ambientY)) {
-          targetAxisRef.current = 'H';
-          if (ambientX > 0) {
-            targetFrameRef.current = 72.0 - ambientX * 24.0; // Right
-          } else {
-            targetFrameRef.current = 72.0 + Math.abs(ambientX) * 24.0; // Left
-          }
-        } else {
-          targetAxisRef.current = 'V';
-          if (ambientY < 0) {
-            targetFrameRef.current = 168.0 - Math.abs(ambientY) * 24.0; // Up
-          } else {
-            targetFrameRef.current = 168.0 + ambientY * 20.0; // Down
-          }
-        }
+        // Ambient Autonomous Sweep: Gentle slow 360° orbital scan when idle or on mobile
+        ambientAngle = (ambientAngle + deltaMs * 0.00035) % (2 * Math.PI);
+        targetAngleRef.current = ambientAngle;
+        targetFrameRef.current = 24.0 + (ambientAngle / (2.0 * Math.PI)) * 216.0;
       }
 
-      // Step along Gaze Graph State Machine
-      const curAxis = currentAxisRef.current;
-      const tgtAxis = targetAxisRef.current;
+      // Step towards Target Frame with Shortest-Path Angular Lerping
+      const tgtAngle = targetAngleRef.current;
       const tgtFrame = targetFrameRef.current;
 
-      if (curAxis === tgtAxis) {
-        // Moving along same axis: Smooth exponential physics damping
-        const diff = tgtFrame - currentFrameRef.current;
-        if (Math.abs(diff) > 0.01) {
+      if (tgtAngle === null || tgtFrame <= 1.5) {
+        // Heading towards Center (Frame 1)
+        const diff = 1.0 - currentFrameRef.current;
+        currentFrameRef.current += diff * 0.16;
+      } else {
+        // Target is on the 360° circular orbit [24, 240]
+        if (currentFrameRef.current < 20.0) {
+          // If emerging from center, smoothly lift out towards orbit
+          const diff = tgtFrame - currentFrameRef.current;
           currentFrameRef.current += diff * 0.16;
         } else {
-          currentFrameRef.current = tgtFrame;
-        }
-      } else {
-        // Cross-axis transition: Traverse through Center neutral hub first
-        const centerFrame = curAxis === 'H' ? 72.0 : 168.0;
-        const diff = centerFrame - currentFrameRef.current;
+          // Both on orbit: Use shortest-path modular angle lerp
+          const curProgress = (currentFrameRef.current - 24.0) / 216.0;
+          let curAngle = curProgress * 2.0 * Math.PI;
 
-        if (Math.abs(diff) < 2.5) {
-          // At Center: Seamlessly switch baseline to opposite axis Center
-          currentAxisRef.current = tgtAxis;
-          currentFrameRef.current = tgtAxis === 'H' ? 72.0 : 168.0;
-        } else {
-          // Lerp towards Center hub
-          currentFrameRef.current += diff * 0.22;
+          let delta = tgtAngle - curAngle;
+          while (delta > Math.PI) delta -= 2.0 * Math.PI;
+          while (delta < -Math.PI) delta += 2.0 * Math.PI;
+
+          curAngle += delta * 0.18;
+          while (curAngle < 0) curAngle += 2.0 * Math.PI;
+          while (curAngle >= 2.0 * Math.PI) curAngle -= 2.0 * Math.PI;
+
+          currentFrameRef.current = 24.0 + (curAngle / (2.0 * Math.PI)) * 216.0;
         }
       }
 
@@ -143,7 +140,7 @@ export const BackgroundVideo: React.FC = () => {
         const iWidth = img.naturalWidth;
         const iHeight = img.naturalHeight;
 
-        // Object-cover calculation with center-right bias for optimal desktop hero composition
+        // Object-cover calculation
         const scale = Math.max(cWidth / iWidth, cHeight / iHeight);
         const drawWidth = iWidth * scale;
         const drawHeight = iHeight * scale;
@@ -151,15 +148,14 @@ export const BackgroundVideo: React.FC = () => {
         // Position on desktop: slightly towards right half to frame next to hero text
         let x: number;
         if (cWidth >= 1024) {
-          x = cWidth - drawWidth * 0.85; // Focus face towards center-right
+          x = cWidth - drawWidth * 0.85;
           if (x > 0) x = 0;
           if (x + drawWidth < cWidth) x = cWidth - drawWidth;
         } else {
-          // Mobile & Tablet: Center horizontally
           x = (cWidth - drawWidth) * 0.5;
         }
 
-        const y = Math.min(0, (cHeight - drawHeight) * 0.25); // Keep head near upper-center
+        const y = Math.min(0, (cHeight - drawHeight) * 0.25);
 
         ctx.drawImage(img, x, y, drawWidth, drawHeight);
       }
@@ -188,7 +184,7 @@ export const BackgroundVideo: React.FC = () => {
     return () => window.removeEventListener('resize', handleResize);
   }, []);
 
-  // 4. Interactive 2D Cursor Gaze Synchronization
+  // 4. Interactive 360° Cursor Angle & Diagonal Synchronization
   useEffect(() => {
     const handleMouseMove = (e: MouseEvent) => {
       if (window.innerWidth < 1024) return;
@@ -200,10 +196,12 @@ export const BackgroundVideo: React.FC = () => {
       }
       idleTimerRef.current = window.setTimeout(() => {
         mousePosRef.current.active = false;
+        targetAngleRef.current = null;
+        targetFrameRef.current = 1.0;
         setDirectionLabel('CENTER');
-      }, 3500);
+      }, 4000);
 
-      // Calculate normalized coordinates [-1, 1] relative to viewport center
+      // Normalized coordinates [-1, 1] relative to viewport center
       const centerX = window.innerWidth * 0.5;
       const centerY = window.innerHeight * 0.5;
 
@@ -215,54 +213,47 @@ export const BackgroundVideo: React.FC = () => {
 
       const r = Math.hypot(nx, ny);
 
-      // Deadzone near center (robot looks straight forward at user)
+      // Deadzone near center -> neutral forward pose (Frame 1)
       if (r < 0.12) {
-        targetFrameRef.current = currentAxisRef.current === 'H' ? 72.0 : 168.0;
+        targetAngleRef.current = null;
+        targetFrameRef.current = 1.0;
         setDirectionLabel('CENTER');
         return;
       }
 
-      // Hysteresis calculation to prevent diagonal chatter
-      const curAxis = currentAxisRef.current;
-      const ratio = Math.abs(nx) / (Math.abs(ny) + 0.001);
+      // Calculate angle alpha from UP (12:00 = 0 rad, clockwise to 2pi)
+      const theta = Math.atan2(ny, nx); // theta in [-pi, pi], where right is 0, down is +pi/2, up is -pi/2
+      let alpha = theta + Math.PI / 2.0; // rotate so UP is 0 rad
+      if (alpha < 0) alpha += 2.0 * Math.PI;
 
-      let chosenAxis: GazeAxis = curAxis;
-      if (curAxis === 'H') {
-        if (ratio < 0.85) chosenAxis = 'V';
+      targetAngleRef.current = alpha;
+      targetFrameRef.current = 24.0 + (alpha / (2.0 * Math.PI)) * 216.0;
+
+      // Determine 8-way directional label (45-degree sectors)
+      const deg = (alpha * 180.0) / Math.PI;
+      if (deg >= 337.5 || deg < 22.5) {
+        setDirectionLabel('LOOKING UP');
+      } else if (deg >= 22.5 && deg < 67.5) {
+        setDirectionLabel('LOOKING UP-RIGHT');
+      } else if (deg >= 67.5 && deg < 112.5) {
+        setDirectionLabel('LOOKING RIGHT');
+      } else if (deg >= 112.5 && deg < 157.5) {
+        setDirectionLabel('LOOKING DOWN-RIGHT');
+      } else if (deg >= 157.5 && deg < 202.5) {
+        setDirectionLabel('LOOKING DOWN');
+      } else if (deg >= 202.5 && deg < 247.5) {
+        setDirectionLabel('LOOKING DOWN-LEFT');
+      } else if (deg >= 247.5 && deg < 292.5) {
+        setDirectionLabel('LOOKING LEFT');
       } else {
-        if (ratio > 1.15) chosenAxis = 'H';
-      }
-
-      targetAxisRef.current = chosenAxis;
-
-      if (chosenAxis === 'H') {
-        const intensity = Math.min(1, Math.abs(nx));
-        if (nx > 0) {
-          // Cursor to the right -> Robot looks right (Frame 72 -> Frame 48)
-          targetFrameRef.current = 72.0 - intensity * 24.0;
-          setDirectionLabel('LOOKING RIGHT');
-        } else {
-          // Cursor to the left -> Robot looks left (Frame 72 -> Frame 96)
-          targetFrameRef.current = 72.0 + intensity * 24.0;
-          setDirectionLabel('LOOKING LEFT');
-        }
-      } else {
-        const intensity = Math.min(1, Math.abs(ny));
-        if (ny < 0) {
-          // Cursor upwards -> Robot looks up (Frame 168 -> Frame 144)
-          targetFrameRef.current = 168.0 - intensity * 24.0;
-          setDirectionLabel('LOOKING UP');
-        } else {
-          // Cursor downwards -> Robot looks down (Frame 168 -> Frame 188)
-          targetFrameRef.current = 168.0 + intensity * 20.0;
-          setDirectionLabel('LOOKING DOWN');
-        }
+        setDirectionLabel('LOOKING UP-LEFT');
       }
     };
 
     const handleMouseLeave = () => {
       mousePosRef.current.active = false;
-      targetFrameRef.current = currentAxisRef.current === 'H' ? 72.0 : 168.0;
+      targetAngleRef.current = null;
+      targetFrameRef.current = 1.0;
       setDirectionLabel('CENTER');
     };
 
@@ -286,7 +277,7 @@ export const BackgroundVideo: React.FC = () => {
       className="order-last lg:order-none relative lg:absolute lg:inset-0 lg:z-0 overflow-hidden pointer-events-none w-full aspect-square md:aspect-video lg:aspect-auto lg:h-full bg-neutral-900/5 lg:bg-transparent"
       aria-hidden="true"
     >
-      {/* 60-120+ FPS Hardware-Accelerated Canvas Layer */}
+      {/* 60-120+ FPS Hardware-Accelerated 360° Canvas Layer */}
       <canvas
         ref={canvasRef}
         className={`w-full h-full object-cover absolute inset-0 transition-opacity duration-500 ${
@@ -304,7 +295,7 @@ export const BackgroundVideo: React.FC = () => {
           <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
           <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500" />
         </span>
-        <span className="text-[#A8BFA5] font-semibold text-[11px]">NEURAL GAZE:</span>
+        <span className="text-[#A8BFA5] font-semibold text-[11px]">360° NEURAL GAZE:</span>
         <span className="text-white font-bold text-[11px]">{directionLabel}</span>
       </div>
 
