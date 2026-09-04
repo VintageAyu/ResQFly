@@ -35,10 +35,10 @@ export const BackgroundVideo: React.FC = () => {
   const mousePosRef = useRef<{ x: number; y: number; active: boolean }>({ x: 0, y: 0, active: false });
   const idleTimerRef = useRef<number | null>(null);
 
-  // Angular Orbit Engine State
-  const currentFrameRef = useRef<number>(1.0);
-  const targetFrameRef = useRef<number>(1.0);
-  const targetAngleRef = useRef<number | null>(null); // Angle in [0, 2pi) where 0 is UP
+  // Continuous 2D Neural Gaze Engine State
+  const smoothedPosRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
+  const currentOrbitFrameRef = useRef<number>(24.0);
+  const currentBlendRef = useRef<number>(0.0);
 
   const [directionLabel, setDirectionLabel] = useState<GazeDirection>('CENTER');
   const [loadedCount, setLoadedCount] = useState<number>(0);
@@ -79,62 +79,51 @@ export const BackgroundVideo: React.FC = () => {
       const isMobile = window.innerWidth < 1024;
       const isMouseActive = mousePosRef.current.active;
 
-      if (isMobile || !isMouseActive) {
-        // When there is no cursor on screen, mobile, or idle: look straight ahead (Frame 1)
-        targetAngleRef.current = null;
-        targetFrameRef.current = 1.0;
+      // Target position in [-1, 1] relative to center
+      const targetX = (isMobile || !isMouseActive) ? 0 : mousePosRef.current.x;
+      const targetY = (isMobile || !isMouseActive) ? 0 : mousePosRef.current.y;
+
+      // 60-120 FPS continuous 2D position smoothing
+      smoothedPosRef.current.x += (targetX - smoothedPosRef.current.x) * 0.16;
+      smoothedPosRef.current.y += (targetY - smoothedPosRef.current.y) * 0.16;
+
+      const sx = smoothedPosRef.current.x;
+      const sy = smoothedPosRef.current.y;
+      const r = Math.hypot(sx, sy);
+
+      // Smooth proportional deflection factor t in [0, 1]
+      const rDead = 0.08;
+      let targetT = 0;
+      if (r > rDead) {
+        targetT = Math.min(1.0, (r - rDead) / (0.55 - rDead));
       }
+      currentBlendRef.current += (targetT - currentBlendRef.current) * 0.18;
+      const blend = currentBlendRef.current;
 
-      // Step towards Target Frame with Shortest-Path Angular Lerping
-      const tgtAngle = targetAngleRef.current;
-      const tgtFrame = targetFrameRef.current;
+      // Continuous angle alpha from UP (12:00 = 0 rad, clockwise to 2pi)
+      const theta = Math.atan2(sy, sx);
+      let alpha = theta + Math.PI / 2.0;
+      if (alpha < 0) alpha += 2.0 * Math.PI;
 
-      if (tgtAngle === null || tgtFrame <= 1.5) {
-        // Heading towards Center Neutral (Frame 1: Looking straight ahead)
-        if (currentFrameRef.current > 24.0) {
-          // If on the orbit [24, 240], navigate along shortest path to Frame 24 (UP)
-          if (currentFrameRef.current > 132.0) {
-            // Left half of orbit: advance forward towards 240 (wraps seamlessly to 24)
-            currentFrameRef.current += (240.0 - currentFrameRef.current) * 0.18;
-            if (currentFrameRef.current >= 238.5) {
-              currentFrameRef.current = 24.0;
-            }
-          } else {
-            // Right half of orbit: ease back down towards 24
-            currentFrameRef.current += (24.0 - currentFrameRef.current) * 0.18;
-            if (currentFrameRef.current <= 24.5) {
-              currentFrameRef.current = 24.0;
-            }
-          }
-        } else {
-          // From Frame 24 down to Frame 1 (Neutral Straight Ahead)
-          const diff = 1.0 - currentFrameRef.current;
-          currentFrameRef.current += diff * 0.18;
-          if (Math.abs(diff) < 0.05) {
-            currentFrameRef.current = 1.0;
-          }
-        }
+      // Target frame on the 360° perimeter orbit
+      const targetOrbitFrame = 24.0 + (alpha / (2.0 * Math.PI)) * 216.0;
+
+      // Shortest-path modular angular lerping for the orbit frame
+      if (blend <= 0.05) {
+        currentOrbitFrameRef.current = targetOrbitFrame;
       } else {
-        // Target is on the 360° circular orbit [24, 240]
-        if (currentFrameRef.current < 20.0) {
-          // If emerging from center, smoothly lift out towards orbit
-          const diff = tgtFrame - currentFrameRef.current;
-          currentFrameRef.current += diff * 0.16;
-        } else {
-          // Both on orbit: Use shortest-path modular angle lerp
-          const curProgress = (currentFrameRef.current - 24.0) / 216.0;
-          let curAngle = curProgress * 2.0 * Math.PI;
+        const curProgress = (currentOrbitFrameRef.current - 24.0) / 216.0;
+        let curAngle = curProgress * 2.0 * Math.PI;
 
-          let delta = tgtAngle - curAngle;
-          while (delta > Math.PI) delta -= 2.0 * Math.PI;
-          while (delta < -Math.PI) delta += 2.0 * Math.PI;
+        let delta = alpha - curAngle;
+        while (delta > Math.PI) delta -= 2.0 * Math.PI;
+        while (delta < -Math.PI) delta += 2.0 * Math.PI;
 
-          curAngle += delta * 0.18;
-          while (curAngle < 0) curAngle += 2.0 * Math.PI;
-          while (curAngle >= 2.0 * Math.PI) curAngle -= 2.0 * Math.PI;
+        curAngle += delta * 0.18;
+        while (curAngle < 0) curAngle += 2.0 * Math.PI;
+        while (curAngle >= 2.0 * Math.PI) curAngle -= 2.0 * Math.PI;
 
-          currentFrameRef.current = 24.0 + (curAngle / (2.0 * Math.PI)) * 216.0;
-        }
+        currentOrbitFrameRef.current = 24.0 + (curAngle / (2.0 * Math.PI)) * 216.0;
       }
 
       // Render Active Frame to Canvas
@@ -146,33 +135,60 @@ export const BackgroundVideo: React.FC = () => {
       const ctx = canvas.getContext('2d', { alpha: false, desynchronized: true });
       if (!ctx) return;
 
-      const clampedFrame = Math.max(1, Math.min(TOTAL_FRAMES, Math.round(currentFrameRef.current)));
-      const img = images[clampedFrame - 1];
+      const imgCenter = images[0]; // Frame 1: Center Neutral
+      if (!imgCenter || !imgCenter.complete || imgCenter.naturalWidth === 0) return;
 
-      if (img && img.complete && img.naturalWidth > 0) {
-        const cWidth = canvas.width;
-        const cHeight = canvas.height;
-        const iWidth = img.naturalWidth;
-        const iHeight = img.naturalHeight;
+      const cWidth = canvas.width;
+      const cHeight = canvas.height;
+      const iWidth = imgCenter.naturalWidth;
+      const iHeight = imgCenter.naturalHeight;
 
-        // Object-cover calculation
-        const scale = Math.max(cWidth / iWidth, cHeight / iHeight);
-        const drawWidth = iWidth * scale;
-        const drawHeight = iHeight * scale;
+      // Object-cover calculation
+      const scale = Math.max(cWidth / iWidth, cHeight / iHeight);
+      const drawWidth = iWidth * scale;
+      const drawHeight = iHeight * scale;
 
-        // Position on desktop: slightly towards right half to frame next to hero text
-        let x: number;
-        if (cWidth >= 1024) {
-          x = cWidth - drawWidth * 0.85;
-          if (x > 0) x = 0;
-          if (x + drawWidth < cWidth) x = cWidth - drawWidth;
-        } else {
-          x = (cWidth - drawWidth) * 0.5;
+      // Position on desktop: slightly towards right half to frame next to hero text
+      let x: number;
+      if (cWidth >= 1024) {
+        x = cWidth - drawWidth * 0.85;
+        if (x > 0) x = 0;
+        if (x + drawWidth < cWidth) x = cWidth - drawWidth;
+      } else {
+        x = (cWidth - drawWidth) * 0.5;
+      }
+
+      const y = Math.min(0, (cHeight - drawHeight) * 0.25);
+
+      // Check if in pure vertical UP sector (sy < 0 and |sx| < 0.22)
+      const isPureUp = sy < 0 && Math.abs(sx) < 0.22;
+
+      if (isPureUp) {
+        // Native filmed frames 1..24 directly for vertical UP motion
+        const upFrameIdx = Math.max(1, Math.min(24, Math.round(1.0 + blend * 23.0)));
+        const upImg = images[upFrameIdx - 1];
+        if (upImg && upImg.complete) {
+          ctx.drawImage(upImg, x, y, drawWidth, drawHeight);
         }
+      } else {
+        const orbitClamped = Math.max(24, Math.min(240, Math.round(currentOrbitFrameRef.current)));
+        const orbitImg = images[orbitClamped - 1];
 
-        const y = Math.min(0, (cHeight - drawHeight) * 0.25);
-
-        ctx.drawImage(img, x, y, drawWidth, drawHeight);
+        if (blend <= 0.02) {
+          // 100% Center (Frame 1)
+          ctx.drawImage(imgCenter, x, y, drawWidth, drawHeight);
+        } else if (blend >= 0.98 && orbitImg && orbitImg.complete) {
+          // 100% Orbit Frame
+          ctx.drawImage(orbitImg, x, y, drawWidth, drawHeight);
+        } else {
+          // Smooth transition between Center and Orbit
+          ctx.drawImage(imgCenter, x, y, drawWidth, drawHeight);
+          if (orbitImg && orbitImg.complete) {
+            ctx.globalAlpha = blend;
+            ctx.drawImage(orbitImg, x, y, drawWidth, drawHeight);
+            ctx.globalAlpha = 1.0;
+          }
+        }
       }
     };
 
@@ -211,8 +227,6 @@ export const BackgroundVideo: React.FC = () => {
       }
       idleTimerRef.current = window.setTimeout(() => {
         mousePosRef.current.active = false;
-        targetAngleRef.current = null;
-        targetFrameRef.current = 1.0;
         setDirectionLabel('CENTER');
       }, 3000);
 
@@ -229,9 +243,7 @@ export const BackgroundVideo: React.FC = () => {
       const r = Math.hypot(nx, ny);
 
       // Deadzone near center -> neutral forward pose (Frame 1)
-      if (r < 0.12) {
-        targetAngleRef.current = null;
-        targetFrameRef.current = 1.0;
+      if (r <= 0.15) {
         setDirectionLabel('CENTER');
         return;
       }
@@ -240,9 +252,6 @@ export const BackgroundVideo: React.FC = () => {
       const theta = Math.atan2(ny, nx); // theta in [-pi, pi], where right is 0, down is +pi/2, up is -pi/2
       let alpha = theta + Math.PI / 2.0; // rotate so UP is 0 rad
       if (alpha < 0) alpha += 2.0 * Math.PI;
-
-      targetAngleRef.current = alpha;
-      targetFrameRef.current = 24.0 + (alpha / (2.0 * Math.PI)) * 216.0;
 
       // Determine 8-way directional label (45-degree sectors)
       const deg = (alpha * 180.0) / Math.PI;
@@ -267,8 +276,6 @@ export const BackgroundVideo: React.FC = () => {
 
     const handleMouseLeave = () => {
       mousePosRef.current.active = false;
-      targetAngleRef.current = null;
-      targetFrameRef.current = 1.0;
       setDirectionLabel('CENTER');
     };
 
