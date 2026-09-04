@@ -72,23 +72,17 @@ export const BackgroundVideo: React.FC = () => {
   // 2. High-Performance 60-120+ FPS Continuous 360° Orbital Canvas Render Loop
   useEffect(() => {
     let animId: number;
-    let lastTime = performance.now();
-    let ambientAngle = 0;
 
-    const render = (time: number) => {
+    const render = () => {
       animId = requestAnimationFrame(render);
-
-      const deltaMs = Math.min(32, time - lastTime);
-      lastTime = time;
 
       const isMobile = window.innerWidth < 1024;
       const isMouseActive = mousePosRef.current.active;
 
       if (isMobile || !isMouseActive) {
-        // Ambient Autonomous Sweep: Gentle slow 360° orbital scan when idle or on mobile
-        ambientAngle = (ambientAngle + deltaMs * 0.00035) % (2 * Math.PI);
-        targetAngleRef.current = ambientAngle;
-        targetFrameRef.current = 24.0 + (ambientAngle / (2.0 * Math.PI)) * 216.0;
+        // When there is no cursor on screen, mobile, or idle: look straight ahead (Frame 1)
+        targetAngleRef.current = null;
+        targetFrameRef.current = 1.0;
       }
 
       // Step towards Target Frame with Shortest-Path Angular Lerping
@@ -96,9 +90,30 @@ export const BackgroundVideo: React.FC = () => {
       const tgtFrame = targetFrameRef.current;
 
       if (tgtAngle === null || tgtFrame <= 1.5) {
-        // Heading towards Center (Frame 1)
-        const diff = 1.0 - currentFrameRef.current;
-        currentFrameRef.current += diff * 0.16;
+        // Heading towards Center Neutral (Frame 1: Looking straight ahead)
+        if (currentFrameRef.current > 24.0) {
+          // If on the orbit [24, 240], navigate along shortest path to Frame 24 (UP)
+          if (currentFrameRef.current > 132.0) {
+            // Left half of orbit: advance forward towards 240 (wraps seamlessly to 24)
+            currentFrameRef.current += (240.0 - currentFrameRef.current) * 0.18;
+            if (currentFrameRef.current >= 238.5) {
+              currentFrameRef.current = 24.0;
+            }
+          } else {
+            // Right half of orbit: ease back down towards 24
+            currentFrameRef.current += (24.0 - currentFrameRef.current) * 0.18;
+            if (currentFrameRef.current <= 24.5) {
+              currentFrameRef.current = 24.0;
+            }
+          }
+        } else {
+          // From Frame 24 down to Frame 1 (Neutral Straight Ahead)
+          const diff = 1.0 - currentFrameRef.current;
+          currentFrameRef.current += diff * 0.18;
+          if (Math.abs(diff) < 0.05) {
+            currentFrameRef.current = 1.0;
+          }
+        }
       } else {
         // Target is on the 360° circular orbit [24, 240]
         if (currentFrameRef.current < 20.0) {
@@ -199,7 +214,7 @@ export const BackgroundVideo: React.FC = () => {
         targetAngleRef.current = null;
         targetFrameRef.current = 1.0;
         setDirectionLabel('CENTER');
-      }, 4000);
+      }, 3000);
 
       // Normalized coordinates [-1, 1] relative to viewport center
       const centerX = window.innerWidth * 0.5;
@@ -257,12 +272,30 @@ export const BackgroundVideo: React.FC = () => {
       setDirectionLabel('CENTER');
     };
 
+    const handleMouseOut = (e: MouseEvent) => {
+      if (!e.relatedTarget && !(e as unknown as { toElement?: Element }).toElement) {
+        handleMouseLeave();
+      }
+    };
+
+    const handleVisibilityChange = () => {
+      if (document.hidden) {
+        handleMouseLeave();
+      }
+    };
+
     window.addEventListener('mousemove', handleMouseMove);
     document.addEventListener('mouseleave', handleMouseLeave);
+    document.addEventListener('mouseout', handleMouseOut);
+    window.addEventListener('blur', handleMouseLeave);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
 
     return () => {
       window.removeEventListener('mousemove', handleMouseMove);
       document.removeEventListener('mouseleave', handleMouseLeave);
+      document.removeEventListener('mouseout', handleMouseOut);
+      window.removeEventListener('blur', handleMouseLeave);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
       if (idleTimerRef.current) {
         window.clearTimeout(idleTimerRef.current);
       }
