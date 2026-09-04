@@ -18,6 +18,9 @@ dist-ssr
 # Private Backend & Proprietary Terminal Engine Logic (Hidden from Public Repository)
 backend/
 
+# Local Cyborg Face Tracking & Cursor Controller (Not pushed to GitHub)
+cyborg-tracker/
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
